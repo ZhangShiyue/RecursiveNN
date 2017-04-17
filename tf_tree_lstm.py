@@ -72,16 +72,17 @@ class tf_NarytreeLSTM(object):
                                regularizer=
                                tf.contrib.layers.l2_regularizer(self.config.reg
                                                                 )):
-            cU = tf.get_variable("cU", [self.emb_dim, 2 * self.hidden_dim],
+            cU = tf.get_variable("cU", [self.emb_dim, 3 * self.hidden_dim],
                                  initializer=tf.random_uniform_initializer(-self.calc_wt_init(), self.calc_wt_init()))
-            cW = tf.get_variable("cW", [self.degree * self.hidden_dim, (self.degree + 3) * self.hidden_dim],
+            cWl = tf.get_variable("cWl", [self.hidden_dim, self.degree * 2 * self.hidden_dim],
                                  initializer=tf.random_uniform_initializer(-self.calc_wt_init(self.hidden_dim),
                                                                            self.calc_wt_init(self.hidden_dim)))
-            cb = tf.get_variable("cb", [4 * self.hidden_dim], initializer=tf.constant_initializer(0.0),
+            cWr = tf.get_variable("cWr", [self.hidden_dim, self.degree * 2 * self.hidden_dim],
+                                 initializer=tf.random_uniform_initializer(-self.calc_wt_init(self.hidden_dim),
+                                                                           self.calc_wt_init(self.hidden_dim)))
+            cb = tf.get_variable("cb", [5 * self.hidden_dim], initializer=tf.constant_initializer(0.0),
                                  regularizer=tf.contrib.layers.l2_regularizer(0.0))
-            # cU = tf.get_variable("cU",[self.emb_dim,2*self.hidden_dim])
-            # cW = tf.get_variable("cW",[self.degree*self.hidden_dim,(self.degree+3)*self.hidden_dim])
-            # cb = tf.get_variable("cb",[4*self.hidden_dim],initializer=tf.constant_initializer(0.0),regularizer=tf.contrib.layers.l2_regularizer(0.0))
+
         with tf.variable_scope("Projection", regularizer=tf.contrib.layers.l2_regularizer(self.config.reg)):
             U = tf.get_variable("U", [self.output_dim, self.hidden_dim],
                                 initializer=tf.random_uniform_initializer(self.calc_wt_init(self.hidden_dim),
@@ -93,17 +94,18 @@ class tf_NarytreeLSTM(object):
     def process_leafs(self, emb):
 
         with tf.variable_scope("Composition", reuse=True):
-            cU = tf.get_variable("cU", [self.emb_dim, 2 * self.hidden_dim])
-            cb = tf.get_variable("cb", [4 * self.hidden_dim])
-            b = tf.slice(cb, [0], [2 * self.hidden_dim])
+            cU = tf.get_variable("cU", [self.emb_dim, 3 * self.hidden_dim])
+            cb = tf.get_variable("cb", [5 * self.hidden_dim])
+            b = tf.slice(cb, [0], [3 * self.hidden_dim])
 
             def _recurseleaf(x):
                 concat_uo = tf.matmul(tf.expand_dims(x, 0), cU) + b
-                u, o = tf.split(1, 2, concat_uo)
+                i, o, u = tf.split(1, 3, concat_uo)
+                i = tf.nn.sigmoid(i)
                 o = tf.nn.sigmoid(o)
                 u = tf.nn.tanh(u)
 
-                c = u  # tf.squeeze(u)
+                c = i * u
                 h = o * tf.nn.tanh(c)
 
                 hc = tf.concat(1, [h, c])
@@ -155,9 +157,10 @@ class tf_NarytreeLSTM(object):
         idx_var = tf.constant(0)  # tf.Variable(0,trainable=False)
 
         with tf.variable_scope("Composition", reuse=True):
-            cW = tf.get_variable("cW", [self.degree * self.hidden_dim, (self.degree + 3) * self.hidden_dim])
-            cb = tf.get_variable("cb", [4 * self.hidden_dim])
-            bu, bo, bi, bf = tf.split(0, 4, cb)
+            cWl = tf.get_variable("cWl", [self.hidden_dim, self.degree * 2 * self.hidden_dim])
+            cWr = tf.get_variable("cWr", [self.hidden_dim, self.degree * 2 * self.hidden_dim])
+            cb = tf.get_variable("cb", [5 * self.hidden_dim])
+            bu, bo, bi, bfl, bfr = tf.split(0, 5, cb)
 
             def _recurrence(node_h, node_c, idx_var):
                 node_info = tf.gather(treestr, idx_var)
@@ -165,18 +168,24 @@ class tf_NarytreeLSTM(object):
                 child_h = tf.gather(node_h, node_info)
                 child_c = tf.gather(node_c, node_info)
 
-                flat_ = tf.reshape(child_h, [-1])
-                tmp = tf.matmul(tf.expand_dims(flat_, 0), cW)
-                u, o, i, fl, fr = tf.split(1, 5, tmp)
+                child_hl, child_hr = tf.split(0, 2, child_h)
+                child_cl, child_cr = tf.split(0, 2, child_c)
 
-                i = tf.nn.sigmoid(i + bi)
-                o = tf.nn.sigmoid(o + bo)
-                u = tf.nn.tanh(u + bu)
-                fl = tf.nn.sigmoid(fl + bf)
-                fr = tf.nn.sigmoid(fr + bf)
+                # flat_ = tf.reshape(child_h, [-1])
+                # tmp = tf.matmul(tf.expand_dims(flat_, 0), cW)
+                tmpl = tf.matmul(child_hl, cWl)
+                tmpr = tf.matmul(child_hr, cWr)
+                ul, ol, il, fl = tf.split(1, 4, tmpl)
+                ur, ori, ir, fr = tf.split(1, 4, tmpr)
 
-                f = tf.concat(0, [fl, fr])
-                c = i * u + tf.reduce_sum(f * child_c, [0])
+                i = tf.nn.sigmoid(il + ir + bi)
+                o = tf.nn.sigmoid(ol + ori + bo)
+                u = tf.nn.tanh(ul+ ur + bu)
+                fl = tf.nn.sigmoid(fl + bfl)
+                fr = tf.nn.sigmoid(fr + bfr)
+
+                # f = tf.concat(0, [fl, fr])
+                c = i * u + tf.reduce_sum(fl * child_cl + fr * child_cr, [0])
                 h = o * tf.nn.tanh(c)
 
                 node_h = tf.concat(0, [node_h, h])
