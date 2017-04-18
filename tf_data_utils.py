@@ -101,6 +101,7 @@ def parse_tree(sentence, parents, labels):
                     node.word = sentence[idx]
 
                 parent = parents[idx]
+                node.add_parent(parent)
                 if parent in nodes:
                     assert len(nodes[parent].children) < 2
                     nodes[parent].add_child(node)
@@ -144,16 +145,19 @@ def extract_tree_data(tree, max_degree=2, only_leaves_have_vals=True, with_label
     labels = []
     leaf_emb = []
     tree_str = []
+    tree_ptr = []
     i = 0
     for leaf in reversed(leaves):
         leaf.idx = i
         i += 1
         labels.append(leaf.label)
         leaf_emb.append(leaf.word)
+        tree_ptr.append(leaf.parent)
     for node in reversed(inodes):
         node.idx = i
         c = [child.idx for child in node.children]
         tree_str.append(c)
+        tree_ptr.append(node.parent)
         labels.append(node.label)
         if not only_leaves_have_vals:
             leaf_emb.append(-1)
@@ -163,12 +167,14 @@ def extract_tree_data(tree, max_degree=2, only_leaves_have_vals=True, with_label
         labels = [l or 0 for l in labels]
         return (np.array(leaf_emb, dtype='int32'),
                 np.array(tree_str, dtype='int32'),
+                np.array(tree_ptr, dtype='int32'),
                 np.array(labels, dtype=float),
                 np.array(labels_exist, dtype=float))
     else:
         print leaf_emb, 'asas'
         return (np.array(leaf_emb, dtype='int32'),
-                np.array(tree_str, dtype='int32'))
+                np.array(tree_str, dtype='int32'),
+                np.array(tree_ptr, dtype='int32'))
 
 
 def extract_batch_tree_data(batchdata, fillnum=120):
@@ -178,18 +184,21 @@ def extract_batch_tree_data(batchdata, fillnum=120):
     leaf_emb_arr.fill(-1)
     treestr_arr = np.empty([dim1, dim2, 2], dtype='int32')
     treestr_arr.fill(-1)
+    treepar_arr = np.empty([dim1, dim2], dtype='int32')
+    treepar_arr.fill(-1)
     labels_arr = np.empty([dim1, dim2], dtype=float)
     labels_arr.fill(-1)
     for i, (tree, _) in enumerate(batchdata):
-        input_, treestr, labels, _ = extract_tree_data(tree,
-                                                       max_degree=2,
-                                                       only_leaves_have_vals=False,
-                                                       with_labels=True)
+        input_, treestr, treepar, labels, _ = extract_tree_data(tree,
+                                                                max_degree=2,
+                                                                only_leaves_have_vals=False,
+                                                                with_labels=True)
         leaf_emb_arr[i, 0:len(input_)] = input_
         treestr_arr[i, 0:len(treestr), 0:2] = treestr
+        treepar_arr[i, 0:len(treepar)] = treepar
         labels_arr[i, 0:len(labels)] = labels
 
-    return leaf_emb_arr, treestr_arr, labels_arr
+    return leaf_emb_arr, treestr_arr, treepar_arr, labels_arr
 
 
 def extract_seq_data(data, numsamples=0, fillnum=100):

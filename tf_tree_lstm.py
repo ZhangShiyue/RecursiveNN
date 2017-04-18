@@ -51,6 +51,7 @@ class tf_NarytreeLSTM(object):
         dim1 = self.config.batch_size
         self.input = tf.placeholder(tf.int32, [dim1, dim2], name='input')
         self.treestr = tf.placeholder(tf.int32, [dim1, dim2, 2], name='tree')
+        self.treepar = tf.placeholder(tf.int32, [dim1, dim2], name='treepar')
         self.labels = tf.placeholder(tf.int32, [dim1, dim2], name='labels')
         self.dropout = tf.placeholder(tf.float32, name='dropout')
 
@@ -65,7 +66,6 @@ class tf_NarytreeLSTM(object):
         return eps
 
     def add_model_variables(self):
-
         with tf.variable_scope("Composition",
                                initializer=
                                tf.contrib.layers.xavier_initializer(),
@@ -75,24 +75,36 @@ class tf_NarytreeLSTM(object):
             cU = tf.get_variable("cU", [self.emb_dim, 3 * self.hidden_dim],
                                  initializer=tf.random_uniform_initializer(-self.calc_wt_init(), self.calc_wt_init()))
             cWl = tf.get_variable("cWl", [self.hidden_dim, self.degree * 2 * self.hidden_dim],
-                                 initializer=tf.random_uniform_initializer(-self.calc_wt_init(self.hidden_dim),
-                                                                           self.calc_wt_init(self.hidden_dim)))
+                                  initializer=tf.random_uniform_initializer(-self.calc_wt_init(self.hidden_dim),
+                                                                            self.calc_wt_init(self.hidden_dim)))
             cWr = tf.get_variable("cWr", [self.hidden_dim, self.degree * 2 * self.hidden_dim],
-                                 initializer=tf.random_uniform_initializer(-self.calc_wt_init(self.hidden_dim),
-                                                                           self.calc_wt_init(self.hidden_dim)))
+                                  initializer=tf.random_uniform_initializer(-self.calc_wt_init(self.hidden_dim),
+                                                                            self.calc_wt_init(self.hidden_dim)))
             cb = tf.get_variable("cb", [5 * self.hidden_dim], initializer=tf.constant_initializer(0.0),
                                  regularizer=tf.contrib.layers.l2_regularizer(0.0))
 
+        with tf.variable_scope("Composition_topdown",
+                               initializer=
+                               tf.contrib.layers.xavier_initializer(),
+                               regularizer=
+                               tf.contrib.layers.l2_regularizer(self.config.reg
+                                                                )):
+            cU = tf.get_variable("cU", [self.emb_dim, 4 * self.hidden_dim],
+                                 initializer=tf.random_uniform_initializer(-self.calc_wt_init(), self.calc_wt_init()))
+            cW = tf.get_variable("cW", [self.hidden_dim, 4 * self.hidden_dim],
+                                 initializer=tf.random_uniform_initializer(-self.calc_wt_init(self.hidden_dim),
+                                                                           self.calc_wt_init(self.hidden_dim)))
+            cb = tf.get_variable("cb", [4 * self.hidden_dim], initializer=tf.constant_initializer(0.0),
+                                 regularizer=tf.contrib.layers.l2_regularizer(0.0))
+
         with tf.variable_scope("Projection", regularizer=tf.contrib.layers.l2_regularizer(self.config.reg)):
-            U = tf.get_variable("U", [self.output_dim, self.hidden_dim],
-                                initializer=tf.random_uniform_initializer(self.calc_wt_init(self.hidden_dim),
-                                                                          self.calc_wt_init(self.hidden_dim))
-                                )
-            bu = tf.get_variable("bu", [self.output_dim], initializer=
-            tf.constant_initializer(0.0), regularizer=tf.contrib.layers.l2_regularizer(0.0))
+            U = tf.get_variable("U", [2 * self.hidden_dim, self.output_dim],
+                                initializer=tf.random_uniform_initializer(self.calc_wt_init(2 * self.hidden_dim),
+                                                                          self.calc_wt_init(2 * self.hidden_dim)))
+            bu = tf.get_variable("bu", [self.output_dim], initializer=tf.constant_initializer(0.0),
+                                 regularizer=tf.contrib.layers.l2_regularizer(0.0))
 
     def process_leafs(self, emb):
-
         with tf.variable_scope("Composition", reuse=True):
             cU = tf.get_variable("cU", [self.emb_dim, 3 * self.hidden_dim])
             cb = tf.get_variable("cb", [5 * self.hidden_dim])
@@ -119,7 +131,9 @@ class tf_NarytreeLSTM(object):
         outloss = []
         prediction = []
         for idx_batch in range(self.config.batch_size):
-            tree_states = self.compute_states(emb_batch, idx_batch)
+            bottom_up_h, bottom_up_c = self.compute_states(emb_batch, idx_batch)
+            top_down_h, _ = self.compute_states_topdown(emb_batch, bottom_up_h, bottom_up_c, idx_batch)
+            tree_states = tf.concat(1, [bottom_up_h, bottom_up_h])
             logits = self.create_output(tree_states)
 
             labels1 = tf.gather(self.labels, idx_batch)
@@ -140,13 +154,9 @@ class tf_NarytreeLSTM(object):
         return batch_loss
 
     def compute_states(self, emb, idx_batch=0):
-
         num_leaves = tf.squeeze(tf.gather(self.num_leaves, idx_batch))
-        # num_leaves=tf.Print(num_leaves,[num_leaves])
         n_inodes = tf.gather(self.n_inodes, idx_batch)
-        # embx=tf.gather(emb,tf.range(num_leaves))
         embx = tf.gather(tf.gather(emb, idx_batch), tf.range(num_leaves))
-        # treestr=self.treestr#tf.gather(self.treestr,tf.range(self.n_inodes))
         treestr = tf.gather(tf.gather(self.treestr, idx_batch), tf.range(n_inodes))
         leaf_hc = self.process_leafs(embx)
         leaf_h, leaf_c = tf.split(1, 2, leaf_hc)
@@ -180,16 +190,15 @@ class tf_NarytreeLSTM(object):
 
                 i = tf.nn.sigmoid(il + ir + bi)
                 o = tf.nn.sigmoid(ol + ori + bo)
-                u = tf.nn.tanh(ul+ ur + bu)
+                u = tf.nn.tanh(ul + ur + bu)
                 fl = tf.nn.sigmoid(fl + bfl)
                 fr = tf.nn.sigmoid(fr + bfr)
 
                 # f = tf.concat(0, [fl, fr])
-                c = i * u + tf.reduce_sum(fl * child_cl + fr * child_cr, [0])
+                c = i * u + fl * child_cl + fr * child_cr
                 h = o * tf.nn.tanh(c)
 
                 node_h = tf.concat(0, [node_h, h])
-
                 node_c = tf.concat(0, [node_c, c])
 
                 idx_var = tf.add(idx_var, 1)
@@ -202,20 +211,104 @@ class tf_NarytreeLSTM(object):
             node_h, node_c, idx_var = tf.while_loop(loop_cond, _recurrence,
                                                     loop_vars, parallel_iterations=10)
 
-            return node_h
+            return node_h, node_c
+
+    def compute_states_topdown(self, emb, bottom_up_h, bottom_up_c, idx_batch=0):
+        num_leaves = tf.squeeze(tf.gather(self.num_leaves, idx_batch))
+        n_inodes = tf.gather(self.n_inodes, idx_batch)
+        embx = tf.gather(tf.gather(emb, idx_batch), tf.range(num_leaves))
+        treepar = tf.gather(tf.gather(self.treepar, idx_batch), tf.range(num_leaves + n_inodes - 1))
+        root_idx = n_inodes + num_leaves - 1
+        # process root
+        node_h = tf.expand_dims(tf.gather(bottom_up_h, root_idx), 0)
+        node_c = tf.expand_dims(tf.gather(bottom_up_c, root_idx), 0)
+
+        idx_var = root_idx - 1
+
+        with tf.variable_scope("Composition_topdown", reuse=True):
+            cW = tf.get_variable("cW", [self.hidden_dim, 4 * self.hidden_dim])
+            cU = tf.get_variable("cU", [self.emb_dim, 4 * self.hidden_dim])
+            cb = tf.get_variable("cb", [4 * self.hidden_dim])
+
+            # bu, bo, bi, bf = tf.split(0, 4, cb)
+
+            def _recurrence(node_h, node_c, idx_var):
+                node_info = tf.gather(treepar, idx_var)
+
+                parent_h = tf.expand_dims(tf.gather(node_h, root_idx - node_info), 0)
+                parent_c = tf.expand_dims(tf.gather(node_c, root_idx - node_info), 0)
+
+                # flat_ = tf.reshape(child_h, [-1])
+                # tmp = tf.matmul(tf.expand_dims(flat_, 0), cW)
+                tmp = tf.matmul(parent_h, cW) + cb
+                u, o, i, f = tf.split(1, 4, tmp)
+
+                i = tf.nn.sigmoid(i)
+                o = tf.nn.sigmoid(o)
+                u = tf.nn.tanh(u)
+                f = tf.nn.sigmoid(f)
+
+                # f = tf.concat(0, [fl, fr])
+                c = i * u + f * parent_c
+                h = o * tf.nn.tanh(c)
+
+                node_h = tf.concat(0, [node_h, h])
+                node_c = tf.concat(0, [node_c, c])
+
+                idx_var = tf.add(idx_var, -1)
+
+                return node_h, node_c, idx_var
+
+            def _recurrence_leaf(node_h, node_c, idx_var):
+                node_info = tf.gather(treepar, idx_var)
+
+                parent_h = tf.expand_dims(tf.gather(node_h, root_idx - node_info), 0)
+                parent_c = tf.expand_dims(tf.gather(node_c, root_idx - node_info), 0)
+                x = tf.expand_dims(tf.gather(embx, idx_var), 0)
+
+                # flat_ = tf.reshape(child_h, [-1])
+                # tmp = tf.matmul(tf.expand_dims(flat_, 0), cW)
+                tmp = tf.matmul(parent_h, cW) + tf.matmul(x, cU) + cb
+                u, o, i, f = tf.split(1, 4, tmp)
+
+                i = tf.nn.sigmoid(i)
+                o = tf.nn.sigmoid(o)
+                u = tf.nn.tanh(u)
+                f = tf.nn.sigmoid(f)
+
+                # f = tf.concat(0, [fl, fr])
+                c = i * u + f * parent_c
+                h = o * tf.nn.tanh(c)
+
+                node_h = tf.concat(0, [node_h, h])
+                node_c = tf.concat(0, [node_c, c])
+
+                idx_var = tf.add(idx_var, -1)
+
+                return node_h, node_c, idx_var
+
+            loop_cond = lambda a1, b1, idx_var: tf.greater(idx_var, num_leaves - 1)
+            loop_vars = [node_h, node_c, idx_var]
+            node_h, node_c, idx_var = tf.while_loop(loop_cond, _recurrence,
+                                                    loop_vars, parallel_iterations=10)
+
+            loop_cond = lambda a1, b1, idx_var: tf.greater(idx_var, -1)
+            loop_vars = [node_h, node_c, idx_var]
+            node_h, node_c, idx_var = tf.while_loop(loop_cond, _recurrence_leaf,
+                                                    loop_vars, parallel_iterations=10)
+            node_h = tf.reverse(node_h, [True, False])
+            node_c = tf.reverse(node_c, [True, False])
+
+            return node_h, node_c
 
     def create_output(self, tree_states):
-
         with tf.variable_scope("Projection", reuse=True):
-            U = tf.get_variable("U", [self.output_dim, self.hidden_dim],
-                                )
+            U = tf.get_variable("U", [2 * self.hidden_dim, self.output_dim])
             bu = tf.get_variable("bu", [self.output_dim])
-
-            h = tf.matmul(tree_states, U, transpose_b=True) + bu
+            h = tf.matmul(tree_states, U) + bu
             return h
 
     def calc_loss(self, logits, labels):
-
         l1 = tf.nn.sparse_softmax_cross_entropy_with_logits(
                 logits, labels)
         loss = tf.reduce_sum(l1, [0])
@@ -229,7 +322,6 @@ class tf_NarytreeLSTM(object):
         return loss, total_loss
 
     def add_training_op_old(self):
-
         opt = tf.train.AdagradOptimizer(self.config.lr)
         train_op = opt.minimize(self.total_loss)
         return train_op
@@ -272,14 +364,13 @@ class tf_NarytreeLSTM(object):
             batch_idxs = data_idxs[i:i + batch_size]
             batch_data = [data[ix] for ix in batch_idxs]  # [i:i+batch_size]
 
-            input_b, treestr_b, labels_b = extract_batch_tree_data(batch_data, self.config.maxnodesize)
+            input_b, treestr_b, treepar_b, labels_b = extract_batch_tree_data(batch_data, self.config.maxnodesize)
 
-            feed = {self.input: input_b, self.treestr: treestr_b, self.labels: labels_b,
+            feed = {self.input: input_b, self.treestr: treestr_b, self.treepar: treepar_b, self.labels: labels_b,
                     self.dropout: self.config.dropout, self.batch_len: len(input_b)}
 
             loss, _, _ = sess.run([self.loss, self.train_op1, self.train_op2], feed_dict=feed)
             # sess.run(self.train_op,feed_dict=feed)
-
             losses.append(loss)
             avg_loss = np.mean(losses)
             sstr = 'avg loss %.2f at example %d of %d\r' % (avg_loss, i, len(data))
@@ -301,9 +392,9 @@ class tf_NarytreeLSTM(object):
             batch_idxs = data_idxs[i:i + batch_size]
             batch_data = [data[ix] for ix in batch_idxs]  # [i:i+batch_size]
             labels_root = [l for _, l in batch_data]
-            input_b, treestr_b, labels_b = extract_batch_tree_data(batch_data, self.config.maxnodesize)
+            input_b, treestr_b, treepar_b, labels_b = extract_batch_tree_data(batch_data, self.config.maxnodesize)
 
-            feed = {self.input: input_b, self.treestr: treestr_b, self.labels: labels_b, self.dropout: 1.0,
+            feed = {self.input: input_b, self.treestr: treestr_b, self.treepar: treepar_b, self.labels: labels_b, self.dropout: 1.0,
                     self.batch_len: len(input_b)}
 
             pred_y = sess.run(self.pred, feed_dict=feed)
@@ -317,118 +408,3 @@ class tf_NarytreeLSTM(object):
 
         acc = float(num_correct) / float(total_data)
         return acc
-
-
-class tf_ChildsumtreeLSTM(tf_NarytreeLSTM):
-    def add_model_variables(self):
-        with tf.variable_scope("Composition",
-                               initializer=
-                               tf.contrib.layers.xavier_initializer(),
-                               regularizer=
-                               tf.contrib.layers.l2_regularizer(self.config.reg
-                                                                )):
-            cUW = tf.get_variable("cUW", [self.emb_dim + self.hidden_dim, 4 * self.hidden_dim])
-            cb = tf.get_variable("cb", [4 * self.hidden_dim], initializer=tf.constant_initializer(0.0),
-                                 regularizer=tf.contrib.layers.l2_regularizer(0.0))
-
-        with tf.variable_scope("Projection", regularizer=tf.contrib.layers.l2_regularizer(self.config.reg)):
-            U = tf.get_variable("U", [self.output_dim, self.hidden_dim],
-                                initializer=tf.random_uniform_initializer(
-                                        -0.05, 0.05))
-            bu = tf.get_variable("bu", [self.output_dim], initializer=
-            tf.constant_initializer(0.0), regularizer=tf.contrib.layers.l2_regularizer(0.0))
-
-    def process_leafs(self, emb):
-        with tf.variable_scope("Composition", reuse=True):
-            cUW = tf.get_variable("cUW")
-            cb = tf.get_variable("cb")
-            U = tf.slice(cUW, [0, 0], [self.emb_dim, 2 * self.hidden_dim])
-            b = tf.slice(cb, [0], [2 * self.hidden_dim])
-
-            def _recurseleaf(x):
-                concat_uo = tf.matmul(tf.expand_dims(x, 0), U) + b
-                u, o = tf.split(1, 2, concat_uo)
-                o = tf.nn.sigmoid(o)
-                u = tf.nn.tanh(u)
-
-                c = u  # tf.squeeze(u)
-                h = o * tf.nn.tanh(c)
-
-                hc = tf.concat(1, [h, c])
-                hc = tf.squeeze(hc)
-                return hc
-
-            hc = tf.map_fn(_recurseleaf, emb)
-            return hc
-
-    def compute_states(self, emb, idx_batch=0):
-        # if num_leaves is None:
-        # num_leaves = self.n_nodes - self.n_inodes
-        num_leaves = tf.squeeze(tf.gather(self.num_leaves, idx_batch))
-        # num_leaves=tf.Print(num_leaves,[num_leaves])
-        n_inodes = tf.gather(self.n_inodes, idx_batch)
-        # embx=tf.gather(emb,tf.range(num_leaves))
-        emb_tree = tf.gather(emb, idx_batch)
-        emb_leaf = tf.gather(emb_tree, tf.range(num_leaves))
-        # treestr=self.treestr#tf.gather(self.treestr,tf.range(self.n_inodes))
-        treestr = tf.gather(tf.gather(self.treestr, idx_batch), tf.range(n_inodes))
-        leaf_hc = self.process_leafs(emb_leaf)
-        leaf_h, leaf_c = tf.split(1, 2, leaf_hc)
-
-        node_h = tf.identity(leaf_h)
-        node_c = tf.identity(leaf_c)
-
-        idx_var = tf.constant(0)  # tf.Variable(0,trainable=False)
-
-        with tf.variable_scope("Composition", reuse=True):
-            cUW = tf.get_variable("cUW", [self.emb_dim + self.hidden_dim, 4 * self.hidden_dim])
-            cb = tf.get_variable("cb", [4 * self.hidden_dim])
-            bu, bo, bi, bf = tf.split(0, 4, cb)
-
-            UW = tf.slice(cUW, [0, 0], [-1, 3 * self.hidden_dim])
-
-            U_fW_f = tf.slice(cUW, [0, 3 * self.hidden_dim], [-1, -1])
-
-            def _recurrence(emb_tree, node_h, node_c, idx_var):
-                node_x = tf.gather(emb_tree, num_leaves + idx_var)
-                # node_x=tf.zeros([self.emb_dim])
-                node_info = tf.gather(treestr, idx_var)
-
-                child_h = tf.gather(node_h, node_info)
-                child_c = tf.gather(node_c, node_info)
-
-                concat_xh = tf.concat(0, [node_x, tf.reduce_sum(node_h, [0])])
-
-                tmp = tf.matmul(tf.expand_dims(concat_xh, 0), UW)
-                u, o, i = tf.split(1, 3, tmp)
-                # node_x=tf.Print(node_x,[tf.shape(node_x),node_x.get_shape()])
-                hl, hr = tf.split(0, 2, child_h)
-                x_hl = tf.concat(0, [node_x, tf.squeeze(hl)])
-                x_hr = tf.concat(0, [node_x, tf.squeeze(hr)])
-                fl = tf.matmul(tf.expand_dims(x_hl, 0), U_fW_f)
-                fr = tf.matmul(tf.expand_dims(x_hr, 0), U_fW_f)
-
-                i = tf.nn.sigmoid(i + bi)
-                o = tf.nn.sigmoid(o + bo)
-                u = tf.nn.tanh(u + bu)
-                fl = tf.nn.sigmoid(fl + bf)
-                fr = tf.nn.sigmoid(fr + bf)
-
-                f = tf.concat(0, [fl, fr])
-                c = i * u + tf.reduce_sum(f * child_c, [0])
-                h = o * tf.nn.tanh(c)
-
-                node_h = tf.concat(0, [node_h, h])
-
-                node_c = tf.concat(0, [node_c, c])
-
-                idx_var = tf.add(idx_var, 1)
-
-                return emb_tree, node_h, node_c, idx_var
-
-            loop_cond = lambda a1, b1, c1, idx_var: tf.less(idx_var, n_inodes)
-
-            loop_vars = [emb_tree, node_h, node_c, idx_var]
-            emb_tree, node_h, node_c, idx_var = tf.while_loop(loop_cond, _recurrence, loop_vars, parallel_iterations=1)
-
-            return node_h
