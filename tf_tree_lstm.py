@@ -4,6 +4,7 @@ import os
 import sys
 
 from tf_data_utils import extract_tree_data, extract_batch_tree_data
+import test_grad
 
 
 class tf_NarytreeLSTM(object):
@@ -43,7 +44,6 @@ class tf_NarytreeLSTM(object):
             emb_tree = tf.nn.embedding_lookup(embedding, ix)
             emb_tree = emb_tree * (tf.expand_dims(
                     tf.to_float(tf.not_equal(self.input, -1)), 2))
-
             return emb_tree
 
     def add_placeholders(self):
@@ -132,8 +132,8 @@ class tf_NarytreeLSTM(object):
         prediction = []
         for idx_batch in range(self.config.batch_size):
             bottom_up_h, bottom_up_c = self.compute_states(emb_batch, idx_batch)
-            top_down_h, _ = self.compute_states_topdown(emb_batch, bottom_up_h, bottom_up_c, idx_batch)
-            tree_states = tf.concat(1, [bottom_up_h, bottom_up_h])
+            top_down_h, top_down_c = self.compute_states_topdown(emb_batch, bottom_up_h, bottom_up_c, idx_batch)
+            tree_states = tf.concat(1, [bottom_up_h, top_down_h])
             logits = self.create_output(tree_states)
 
             labels1 = tf.gather(self.labels, idx_batch)
@@ -218,10 +218,10 @@ class tf_NarytreeLSTM(object):
         n_inodes = tf.gather(self.n_inodes, idx_batch)
         embx = tf.gather(tf.gather(emb, idx_batch), tf.range(num_leaves))
         treepar = tf.gather(tf.gather(self.treepar, idx_batch), tf.range(num_leaves + n_inodes - 1))
-        root_idx = n_inodes + num_leaves - 1
+        root_idx = num_leaves + n_inodes - 1
         # process root
-        node_h = tf.expand_dims(tf.gather(bottom_up_h, root_idx), 0)
-        node_c = tf.expand_dims(tf.gather(bottom_up_c, root_idx), 0)
+        node_h = tf.slice(bottom_up_h, [root_idx, 0], [-1, self.hidden_dim])
+        node_c = tf.slice(bottom_up_c, [root_idx, 0], [-1, self.hidden_dim])
 
         idx_var = root_idx - 1
 
@@ -230,27 +230,22 @@ class tf_NarytreeLSTM(object):
             cU = tf.get_variable("cU", [self.emb_dim, 4 * self.hidden_dim])
             cb = tf.get_variable("cb", [4 * self.hidden_dim])
 
-            # bu, bo, bi, bf = tf.split(0, 4, cb)
-
             def _recurrence(node_h, node_c, idx_var):
                 node_info = tf.gather(treepar, idx_var)
 
                 parent_h = tf.expand_dims(tf.gather(node_h, root_idx - node_info), 0)
                 parent_c = tf.expand_dims(tf.gather(node_c, root_idx - node_info), 0)
 
-                # flat_ = tf.reshape(child_h, [-1])
-                # tmp = tf.matmul(tf.expand_dims(flat_, 0), cW)
-                tmp = tf.matmul(parent_h, cW) + cb
-                u, o, i, f = tf.split(1, 4, tmp)
+                tmp = tf.matmul(parent_h, cW)
+                ui, oi, ii, fi = tf.split(1, 4, tmp)
 
-                i = tf.nn.sigmoid(i)
-                o = tf.nn.sigmoid(o)
-                u = tf.nn.tanh(u)
-                f = tf.nn.sigmoid(f)
+                i = tf.nn.sigmoid(ii)
+                o = tf.nn.sigmoid(oi)
+                u = tf.nn.tanh(ui)
+                f = tf.nn.sigmoid(fi)
 
-                # f = tf.concat(0, [fl, fr])
                 c = i * u + f * parent_c
-                h = o * tf.nn.tanh(c)
+                h = o * c
 
                 node_h = tf.concat(0, [node_h, h])
                 node_c = tf.concat(0, [node_c, c])
@@ -394,7 +389,8 @@ class tf_NarytreeLSTM(object):
             labels_root = [l for _, l in batch_data]
             input_b, treestr_b, treepar_b, labels_b = extract_batch_tree_data(batch_data, self.config.maxnodesize)
 
-            feed = {self.input: input_b, self.treestr: treestr_b, self.treepar: treepar_b, self.labels: labels_b, self.dropout: 1.0,
+            feed = {self.input: input_b, self.treestr: treestr_b, self.treepar: treepar_b, self.labels: labels_b,
+                    self.dropout: 1.0,
                     self.batch_len: len(input_b)}
 
             pred_y = sess.run(self.pred, feed_dict=feed)

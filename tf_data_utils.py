@@ -2,6 +2,7 @@ from tf_treenode import tNode, processTree
 import numpy as np
 import os
 import random
+import pickle as pkl
 
 
 class Vocab(object):
@@ -9,7 +10,6 @@ class Vocab(object):
         self.words = []
         self.word2idx = {}
         self.idx2word = {}
-
         self.load(path)
 
     def load(self, path):
@@ -84,34 +84,19 @@ def parse_tree(sentence, parents, labels):
     nodes = {}
     parents = [p - 1 for p in parents]  # change to zero based
     sentence = [w for w in sentence.strip().split()]
+    root = None
     for i in xrange(len(parents)):
-        if i not in nodes:
-            idx = i
-            prev = None
-            while True:
-                node = tNode(idx)
-                if prev is not None:
-                    assert prev.idx != node.idx
-                    node.add_child(prev)
-
-                node.label = labels[idx]
-                nodes[idx] = node
-
-                if idx < len(sentence):
-                    node.word = sentence[idx]
-
-                parent = parents[idx]
-                node.add_parent(parent)
-                if parent in nodes:
-                    assert len(nodes[parent].children) < 2
-                    nodes[parent].add_child(node)
-                    break
-                elif parent == -1:
-                    root = node
-                    break
-
-                prev = node
-                idx = parent
+        nodes[i] = tNode(i)
+    for i in xrange(len(parents)):
+        nodes[i].label = labels[i]
+        if i < len(sentence):
+            nodes[i].word = sentence[i]
+        parent = parents[i]
+        if parent != -1:
+            nodes[parent].add_child(nodes[i])
+            nodes[i].add_parent(nodes[parent])
+        else:
+            root = nodes[i]
 
     return root
 
@@ -152,16 +137,19 @@ def extract_tree_data(tree, max_degree=2, only_leaves_have_vals=True, with_label
         i += 1
         labels.append(leaf.label)
         leaf_emb.append(leaf.word)
-        tree_ptr.append(leaf.parent)
     for node in reversed(inodes):
         node.idx = i
         c = [child.idx for child in node.children]
         tree_str.append(c)
-        tree_ptr.append(node.parent)
         labels.append(node.label)
         if not only_leaves_have_vals:
             leaf_emb.append(-1)
         i += 1
+    for leaf in reversed(leaves):
+        tree_ptr.append(leaf.parent.idx)
+    for node in reversed(inodes):
+        if node.parent:
+            tree_ptr.append(node.parent.idx)
     if with_labels:
         labels_exist = [l is not None for l in labels]
         labels = [l or 0 for l in labels]
@@ -285,18 +273,21 @@ def get_max_node_size(datadic):
 
 
 def test_fn():
-    data_dir = './stanford_lstm/data/sst'
+    data_dir = './project_data/sst/'
     fine_grained = 0
     data, _ = load_sentiment_treebank(data_dir, fine_grained)
-    for d in data.itervalues():
-        print len(d)
+    # for d in data.itervalues():
+    #     print len(d)
 
-    d = data['dev']
-    a, b, c, _ = extract_seq_data(d[0:1], 5)
-    print a, b, c
+    tree = data['dev'][0][0]
+    _, _, treepar = extract_tree_data(tree)
+    print treepar
 
-    print get_max_len_data(data)
-    return data
+    # a, b, c, _ = extract_seq_data(d[0:1], 5)
+    # print a, b, c
+    #
+    # print get_max_len_data(data)
+    # return data
 
 
 if __name__ == '__main__':
