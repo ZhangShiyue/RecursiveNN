@@ -1,4 +1,4 @@
-Tensorflow implementation of 'Bi-direactional NarytreeLSTM'.
+Tensorflow implementation of 'Bi-directional NarytreeLSTM'.
 
 Pre-preparation:
 Download Standford Sentiment Treebank data, preprocess, and set data path './project_data/sst/'
