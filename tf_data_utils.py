@@ -2,7 +2,6 @@ from tf_treenode import tNode, processTree
 import numpy as np
 import os
 import random
-import pickle as pkl
 
 
 class Vocab(object):

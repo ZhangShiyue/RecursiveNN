@@ -1,23 +1,15 @@
-import tf_data_utils as utils
-
-import os
 import sys
+import time
 import numpy as np
 import tensorflow as tf
 import random
-import pickle
 
-import tf_seq_lstm
 import tf_tree_lstm
+import tf_data_utils as utils
 
 DIR = './project_data/sst/'
 GLOVE_DIR = './'
 
-import pdb
-import time
-
-
-# from tf_data_utils import extract_tree_data,load_sentiment_treebank
 
 class Config(object):
     num_emb = None

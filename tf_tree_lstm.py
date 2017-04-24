@@ -3,8 +3,7 @@ import tensorflow as tf
 import os
 import sys
 
-from tf_data_utils import extract_tree_data, extract_batch_tree_data
-import test_grad
+from tf_data_utils import extract_batch_tree_data
 
 
 class tf_NarytreeLSTM(object):
